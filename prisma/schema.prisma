@@ -1,0 +1,1610 @@
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// ============================================================================
+// 1. CORE & TENANCY
+// ============================================================================
+
+model Organization {
+  id          String   @id @default(uuid())
+  name        String   @db.VarChar(255)
+  slug        String   @unique @db.VarChar(191)
+  logo        String?  @db.VarChar(500)
+  address     String?  @db.Text
+  phone       String?  @db.VarChar(20)
+  email       String?  @db.VarChar(191)
+  taxId       String?  @db.VarChar(100)   // BIN/TIN
+  baseCurrency String  @default("BDT") @db.VarChar(10)
+  fiscalYearStart Int  @default(7)       // month number, e.g. 7 = July
+  isActive    Boolean  @default(true)
+
+  users        OrganizationUser[]
+  branches     Branch[]
+  employees    Employee[]
+  customers    Customer[]
+  suppliers    Supplier[]
+  warehouses   Warehouse[]
+  fibers       Fiber[]
+  yarns        YarnMaster[]
+  fabrics      FabricConstruction[]
+  machines     Machine[]
+  looms        Loom[]
+  products     Product[]
+  boms         BOM[]
+  purchaseOrders PurchaseOrder[]
+  salesOrders  SalesOrder[]
+  chartOfAccounts ChartOfAccount[]
+  journalEntries JournalEntry[]
+  currencies   Currency[]
+  roles        Role[]
+  attachments  Attachment[]
+  notifications Notification[]
+  settings     Setting[]
+  approvalWorkflows ApprovalWorkflow[]
+  numberSequences NumberSequence[]
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("organizations")
+}
+
+model Branch {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String   @db.VarChar(255)   // e.g. "Unit-1 Spinning Mill", "Unit-2 Weaving"
+  type           BranchType @default(FACTORY)
+  address        String?  @db.Text
+  isActive       Boolean  @default(true)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  warehouses     Warehouse[]
+  machines       Machine[]
+  looms          Loom[]
+  employees      Employee[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("branches")
+}
+
+enum BranchType {
+  FACTORY
+  HEAD_OFFICE
+  WAREHOUSE_ONLY
+  SALES_OFFICE
+}
+
+model OrganizationUser {
+  id              String         @id @default(uuid())
+  organizationId  String
+  userId          String
+  roleInOrg       MembershipRole @default(MEMBER)
+
+  organization    Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user            User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt       DateTime       @default(now())
+  updatedAt       DateTime       @updatedAt
+
+  @@unique([organizationId, userId])
+  @@map("organization_users")
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  MANAGER
+  MEMBER
+  VIEWER
+}
+
+model Currency {
+  id             String   @id @default(uuid())
+  organizationId String
+  code           String   @db.VarChar(10)   // BDT, USD, EUR
+  name           String   @db.VarChar(100)
+  symbol         String   @db.VarChar(10)
+  isBase         Boolean  @default(false)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  exchangeRates  ExchangeRate[]
+
+  @@unique([organizationId, code])
+  @@map("currencies")
+}
+
+model ExchangeRate {
+  id          String   @id @default(uuid())
+  currencyId  String
+  rateToBase  Float
+  effectiveDate DateTime
+
+  currency    Currency @relation(fields: [currencyId], references: [id], onDelete: Cascade)
+
+  @@map("exchange_rates")
+}
+
+model NumberSequence {
+  id             String   @id @default(uuid())
+  organizationId String
+  entity         String   @db.VarChar(100)  // e.g. "PO", "SO", "GRN", "INVOICE"
+  prefix         String   @db.VarChar(20)
+  lastNumber     Int      @default(0)
+  padLength      Int      @default(5)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, entity])
+  @@map("number_sequences")
+}
+
+// ============================================================================
+// 2. USER, ROLE & PERMISSION (RBAC)
+// ============================================================================
+
+model User {
+  id              String   @id @default(uuid())
+  email           String   @unique @db.VarChar(191)
+  password        String   @db.VarChar(255)
+  firstName       String   @db.VarChar(100)
+  lastName        String   @db.VarChar(100)
+  avatar          String?  @db.VarChar(500)
+  phone           String?  @db.VarChar(20)
+  isActive        Boolean  @default(true)
+  emailVerified   Boolean  @default(false)
+  twoFactorEnabled Boolean @default(false)
+  lastLoginAt     DateTime?
+
+  organizations   OrganizationUser[]
+  employee        Employee?
+  notifications   Notification[]
+  auditLogs       AuditLog[]
+  approvalSteps   ApprovalStep[]
+  sessions        UserSession[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("users")
+}
+
+model UserSession {
+  id          String   @id @default(uuid())
+  userId      String
+  token       String   @unique @db.VarChar(500)
+  ipAddress   String?  @db.VarChar(45)
+  userAgent   String?  @db.Text
+  expiresAt   DateTime
+
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+
+  @@map("user_sessions")
+}
+
+model Role {
+  id             String   @id @default(uuid())
+  organizationId String?
+  name           String   @db.VarChar(100)
+  description    String?  @db.Text
+  isSystem       Boolean  @default(false)
+
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  permissions    RolePermission[]
+  employees      Employee[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, name])
+  @@map("roles")
+}
+
+model Permission {
+  id          String   @id @default(uuid())
+  resource    String   @db.VarChar(100)   // Product, Employee, Invoice, PurchaseOrder, etc.
+  action      String   @db.VarChar(50)    // create, read, update, delete, approve, export
+  description String?  @db.Text
+
+  roles       RolePermission[]
+
+  @@unique([resource, action])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       String
+  permissionId String
+
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@map("role_permissions")
+}
+
+// ============================================================================
+// 3. HR & PAYROLL MODULE
+// ============================================================================
+
+model Employee {
+  id              String          @id @default(uuid())
+  userId          String?         @unique
+  organizationId  String
+  branchId        String?
+  roleId          String?
+  employeeCode    String          @unique @db.VarChar(50)
+  firstName       String          @db.VarChar(100)
+  lastName        String          @db.VarChar(100)
+  email           String          @unique @db.VarChar(191)
+  phone           String?         @db.VarChar(20)
+  nid             String?         @db.VarChar(50)     // national ID
+  dateOfBirth     DateTime?
+  gender          String?         @db.VarChar(20)
+  department      String          @db.VarChar(100)    // Spinning, Weaving, Maintenance, Admin, Accounts
+  designation     String          @db.VarChar(100)    // Operator, Supervisor, Shift-in-charge
+  employmentType  EmploymentType  @default(PERMANENT)
+  wageType        WageType        @default(MONTHLY)
+  joinedAt        DateTime        @default(now())
+  leftAt          DateTime?
+  basicSalary     Float?
+  pieceRate       Float?          // taka per piece/unit, for piece-rate workers
+  status          EmployeeStatus  @default(ACTIVE)
+
+  user            User?           @relation(fields: [userId], references: [id])
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch          Branch?         @relation(fields: [branchId], references: [id])
+  role            Role?           @relation(fields: [roleId], references: [id])
+
+  attendances     Attendance[]
+  leaves          LeaveRequest[]
+  payslips        Payslip[]
+  shiftAssignments ShiftAssignment[]
+  spinningLogs    SpinningProductionLog[]
+  weavingLogs     WeavingProductionLog[]
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@map("employees")
+}
+
+enum EmploymentType {
+  PERMANENT
+  CONTRACT
+  DAILY_WAGE
+  APPRENTICE
+}
+
+enum WageType {
+  MONTHLY
+  DAILY
+  PIECE_RATE
+  HOURLY
+}
+
+enum EmployeeStatus {
+  ACTIVE
+  INACTIVE
+  TERMINATED
+  ON_LEAVE
+}
+
+model Shift {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String   @db.VarChar(100)  // "A Shift", "B Shift", "C Shift", "General"
+  startTime      String   @db.VarChar(10)   // "06:00"
+  endTime        String   @db.VarChar(10)   // "14:00"
+
+  assignments    ShiftAssignment[]
+  attendances    Attendance[]
+  spinningLogs   SpinningProductionLog[]
+  weavingLogs    WeavingProductionLog[]
+
+  createdAt      DateTime @default(now())
+
+  @@map("shifts")
+}
+
+model ShiftAssignment {
+  id          String   @id @default(uuid())
+  employeeId  String
+  shiftId     String
+  effectiveFrom DateTime
+  effectiveTo   DateTime?
+
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift       Shift    @relation(fields: [shiftId], references: [id])
+
+  @@map("shift_assignments")
+}
+
+model Attendance {
+  id          String   @id @default(uuid())
+  employeeId  String
+  shiftId     String?
+  date        DateTime @db.Date
+  checkIn     DateTime?
+  checkOut    DateTime?
+  status      AttendanceStatus @default(PRESENT)
+  overtimeHours Float  @default(0)
+  remarks     String?  @db.Text
+
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  shift       Shift?   @relation(fields: [shiftId], references: [id])
+
+  createdAt   DateTime @default(now())
+
+  @@unique([employeeId, date])
+  @@map("attendances")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  HALF_DAY
+  LEAVE
+  HOLIDAY
+  WEEKEND
+}
+
+model LeaveRequest {
+  id          String   @id @default(uuid())
+  employeeId  String
+  leaveType   LeaveType
+  startDate   DateTime @db.Date
+  endDate     DateTime @db.Date
+  reason      String?  @db.Text
+  status      ApprovalStatus @default(PENDING)
+  approvedBy  String?
+
+  employee    Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  createdAt   DateTime @default(now())
+
+  @@map("leave_requests")
+}
+
+enum LeaveType {
+  CASUAL
+  SICK
+  EARNED
+  MATERNITY
+  UNPAID
+}
+
+model PayrollRun {
+  id             String   @id @default(uuid())
+  organizationId String
+  month          Int
+  year           Int
+  status         PayrollStatus @default(DRAFT)
+  totalAmount    Float    @default(0)
+
+  payslips       Payslip[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@unique([organizationId, month, year])
+  @@map("payroll_runs")
+}
+
+enum PayrollStatus {
+  DRAFT
+  PROCESSED
+  PAID
+}
+
+model Payslip {
+  id             String   @id @default(uuid())
+  payrollRunId   String
+  employeeId     String
+  basicSalary    Float    @default(0)
+  pieceRatePay   Float    @default(0)   // production-linked pay
+  overtimePay    Float    @default(0)
+  allowances     Float    @default(0)
+  deductions     Float    @default(0)
+  netPay         Float    @default(0)
+  paidAt         DateTime?
+
+  payrollRun     PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employee       Employee   @relation(fields: [employeeId], references: [id])
+
+  @@unique([payrollRunId, employeeId])
+  @@map("payslips")
+}
+
+// ============================================================================
+// 4. FIBER / YARN / FABRIC MASTERS (Textile-specific inventory)
+// ============================================================================
+
+model Fiber {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String   @db.VarChar(255)   // "Cotton - Comilla", "Polyester Staple"
+  fiberType      String   @db.VarChar(100)   // Cotton, Polyester, Viscose, Blend
+  grade          String?  @db.VarChar(50)    // A, B, premium
+  origin         String?  @db.VarChar(100)   // country/region
+  micronaire     Float?
+  staple         Float?   // staple length mm
+  unit           String   @default("KG") @db.VarChar(20)
+  reorderLevel   Float    @default(0)
+  isActive       Boolean  @default(true)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lots           FiberLot[]
+  purchaseItems  PurchaseOrderItem[]
+  bomItems       BOMItem[] @relation("BOMFiber")
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("fibers")
+}
+
+model FiberLot {
+  id            String   @id @default(uuid())
+  fiberId       String
+  lotNumber     String   @db.VarChar(100)
+  supplierId    String?
+  warehouseId   String
+  quantityIn    Float    // kg received
+  quantityLeft  Float    // kg remaining
+  bags          Int?
+  qualityNotes  String?  @db.Text
+  receivedAt    DateTime @default(now())
+
+  fiber         Fiber     @relation(fields: [fiberId], references: [id], onDelete: Cascade)
+  supplier      Supplier? @relation(fields: [supplierId], references: [id])
+  warehouse     Warehouse @relation(fields: [warehouseId], references: [id])
+  spinningOrders SpinningProductionOrder[] @relation("FiberLotUsage")
+
+  @@unique([fiberId, lotNumber])
+  @@map("fiber_lots")
+}
+
+model YarnMaster {
+  id             String   @id @default(uuid())
+  organizationId String
+  countValue     Float                    // e.g. 30
+  countSystem    YarnCountSystem @default(NE)
+  ply            Int      @default(1)     // single = 1, double = 2
+  blendRatio     String?  @db.VarChar(100) // "60% Cotton / 40% Polyester"
+  yarnType       String?  @db.VarChar(100) // Combed, Carded, OE, Compact
+  unit           String   @default("KG") @db.VarChar(20)
+  standardCostPerKg Float?
+  isActive       Boolean  @default(true)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lots           YarnLot[]
+  bomAsOutput    BOM[] @relation("YarnOutputBOM")
+  fabricUses     FabricConstruction[] @relation("FabricWarpYarn")
+  fabricUsesWeft FabricConstruction[] @relation("FabricWeftYarn")
+  purchaseItems  PurchaseOrderItem[]
+  salesOrderItems SalesOrderItem[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("yarn_masters")
+}
+
+enum YarnCountSystem {
+  NE      // English cotton count
+  NM      // Metric count
+  DENIER
+  TEX
+}
+
+model YarnLot {
+  id              String   @id @default(uuid())
+  yarnId          String
+  lotNumber       String   @db.VarChar(100)
+  warehouseId     String
+  quantityIn      Float
+  quantityLeft    Float
+  productionOrderId String?
+  qualityGrade    String?  @db.VarChar(20)   // A, B, C
+  producedAt      DateTime @default(now())
+
+  yarn            YarnMaster @relation(fields: [yarnId], references: [id], onDelete: Cascade)
+  warehouse       Warehouse  @relation(fields: [warehouseId], references: [id])
+  productionOrder SpinningProductionOrder? @relation(fields: [productionOrderId], references: [id])
+  warpBeams       WarpBeam[]
+
+  @@unique([yarnId, lotNumber])
+  @@map("yarn_lots")
+}
+
+model FabricConstruction {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String   @db.VarChar(255)   // "Poplin 40x40 133x72 58 inch"
+  weaveType      String   @db.VarChar(50)    // Plain, Twill, Satin, Dobby, Jacquard
+  warpYarnId     String
+  weftYarnId     String
+  warpCount      String?  @db.VarChar(20)
+  weftCount      String?  @db.VarChar(20)
+  epi            Int      // ends per inch
+  ppi            Int      // picks per inch
+  width          Float    // finished width in inches
+  gsm            Float?   // grams per square meter
+  unit           String   @default("METER") @db.VarChar(20)
+  standardCostPerUnit Float?
+  isActive       Boolean  @default(true)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  warpYarn       YarnMaster @relation("FabricWarpYarn", fields: [warpYarnId], references: [id])
+  weftYarn       YarnMaster @relation("FabricWeftYarn", fields: [weftYarnId], references: [id])
+  rolls          FabricRoll[]
+  bomAsOutput    BOM[] @relation("FabricOutputBOM")
+  salesOrderItems SalesOrderItem[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("fabric_constructions")
+}
+
+model FabricRoll {
+  id              String   @id @default(uuid())
+  fabricId        String
+  rollNumber      String   @db.VarChar(100)
+  warehouseId     String
+  loomId          String?
+  lengthMeters    Float
+  weightKg        Float?
+  qualityGrade    FabricGrade @default(A)
+  status          RollStatus  @default(IN_STOCK)
+  producedAt      DateTime @default(now())
+
+  fabric          FabricConstruction @relation(fields: [fabricId], references: [id], onDelete: Cascade)
+  warehouse       Warehouse @relation(fields: [warehouseId], references: [id])
+  loom            Loom?     @relation(fields: [loomId], references: [id])
+  inspections     QualityInspection[]
+  dispatchItems   DispatchItem[]
+
+  @@unique([fabricId, rollNumber])
+  @@map("fabric_rolls")
+}
+
+enum FabricGrade {
+  A
+  B
+  C
+  REJECT
+}
+
+enum RollStatus {
+  IN_STOCK
+  RESERVED
+  DISPATCHED
+  REJECTED
+}
+
+// ============================================================================
+// 5. MACHINE MASTERS (Spinning + Weaving)
+// ============================================================================
+
+model Machine {
+  id             String   @id @default(uuid())
+  organizationId String
+  branchId       String?
+  name           String   @db.VarChar(255)   // "Ring Frame #3"
+  machineType    MachineType
+  spindles       Int?
+  capacityPerShift Float?  // kg per shift, for spinning machines
+  manufacturer   String?  @db.VarChar(100)
+  installedAt    DateTime?
+  status         MachineStatus @default(RUNNING)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch         Branch?      @relation(fields: [branchId], references: [id])
+  spinningLogs   SpinningProductionLog[]
+  downtimeLogs   MachineDowntime[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("machines")
+}
+
+enum MachineType {
+  BLOW_ROOM
+  CARDING
+  DRAWING
+  COMBER
+  SIMPLEX
+  RING_FRAME
+  AUTOCONER
+  OE_ROTOR
+  WARPING
+  SIZING
+  OTHER
+}
+
+model Loom {
+  id             String   @id @default(uuid())
+  organizationId String
+  branchId       String?
+  name           String   @db.VarChar(255)   // "Loom #12"
+  loomType       LoomType
+  width          Float?   // reed width inches
+  manufacturer   String?  @db.VarChar(100)
+  installedAt    DateTime?
+  status         MachineStatus @default(RUNNING)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch         Branch?      @relation(fields: [branchId], references: [id])
+  weavingLogs    WeavingProductionLog[]
+  fabricRolls    FabricRoll[]
+  downtimeLogs   MachineDowntime[]
+  warpBeamAssignments WarpBeam[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("looms")
+}
+
+enum LoomType {
+  SHUTTLE
+  AIR_JET
+  WATER_JET
+  RAPIER
+  PROJECTILE
+}
+
+enum MachineStatus {
+  RUNNING
+  IDLE
+  MAINTENANCE
+  BREAKDOWN
+  RETIRED
+}
+
+model MachineDowntime {
+  id          String   @id @default(uuid())
+  machineId   String?
+  loomId      String?
+  reasonCode  String   @db.VarChar(100)   // "Power Failure", "Yarn Breakage", "Mechanical Fault"
+  startTime   DateTime
+  endTime     DateTime?
+  durationMin Int?
+  remarks     String?  @db.Text
+
+  machine     Machine? @relation(fields: [machineId], references: [id])
+  loom        Loom?    @relation(fields: [loomId], references: [id])
+
+  createdAt   DateTime @default(now())
+
+  @@map("machine_downtimes")
+}
+
+// ============================================================================
+// 6. BILL OF MATERIALS & COSTING
+// ============================================================================
+
+model BOM {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String   @db.VarChar(255)
+  outputType     BOMOutputType
+  yarnOutputId   String?
+  fabricOutputId String?
+  version        Int      @default(1)
+  isActive       Boolean  @default(true)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  yarnOutput     YarnMaster?         @relation("YarnOutputBOM", fields: [yarnOutputId], references: [id])
+  fabricOutput   FabricConstruction? @relation("FabricOutputBOM", fields: [fabricOutputId], references: [id])
+  items          BOMItem[]
+  costSheets     CostSheet[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("boms")
+}
+
+enum BOMOutputType {
+  YARN
+  FABRIC
+}
+
+model BOMItem {
+  id          String   @id @default(uuid())
+  bomId       String
+  fiberId     String?
+  inputYarnId String?
+  quantity    Float    // per unit output, e.g. per kg yarn or per meter fabric
+  unit        String   @db.VarChar(20)
+  wastagePct  Float    @default(0)
+
+  bom         BOM     @relation(fields: [bomId], references: [id], onDelete: Cascade)
+  fiber       Fiber?  @relation("BOMFiber", fields: [fiberId], references: [id])
+
+  @@map("bom_items")
+}
+
+model CostSheet {
+  id            String   @id @default(uuid())
+  bomId         String
+  referenceType CostReferenceType
+  referenceId   String              // links to SpinningProductionOrder.id or WeavingProductionOrder.id
+  materialCost  Float    @default(0)
+  laborCost     Float    @default(0)
+  overheadCost  Float    @default(0)
+  wastageCost   Float    @default(0)
+  totalCost     Float    @default(0)
+  costPerUnit   Float    @default(0)
+  outputQty     Float    @default(0)
+
+  bom           BOM      @relation(fields: [bomId], references: [id])
+  items         CostSheetItem[]
+
+  createdAt     DateTime @default(now())
+
+  @@map("cost_sheets")
+}
+
+enum CostReferenceType {
+  SPINNING_ORDER
+  WEAVING_ORDER
+}
+
+model CostSheetItem {
+  id          String   @id @default(uuid())
+  costSheetId String
+  description String   @db.VarChar(255)
+  quantity    Float
+  rate        Float
+  amount      Float
+
+  costSheet   CostSheet @relation(fields: [costSheetId], references: [id], onDelete: Cascade)
+
+  @@map("cost_sheet_items")
+}
+
+// ============================================================================
+// 7. SPINNING PRODUCTION
+// ============================================================================
+
+model SpinningProductionOrder {
+  id             String   @id @default(uuid())
+  organizationId String
+  orderNumber    String   @unique @db.VarChar(100)
+  yarnId         String
+  bomId          String?
+  targetQtyKg    Float
+  producedQtyKg  Float    @default(0)
+  status         ProductionOrderStatus @default(PLANNED)
+  startDate      DateTime?
+  endDate        DateTime?
+
+  fiberLots      FiberLot[] @relation("FiberLotUsage")
+  logs           SpinningProductionLog[]
+  wasteLogs      WasteLog[]
+  yarnLots       YarnLot[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("spinning_production_orders")
+}
+
+enum ProductionOrderStatus {
+  PLANNED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  ON_HOLD
+}
+
+model SpinningProductionLog {
+  id                String   @id @default(uuid())
+  productionOrderId String
+  machineId         String
+  employeeId        String?
+  shiftId           String?
+  logDate           DateTime @db.Date
+  outputKg          Float
+  spindleHours      Float?
+  efficiencyPct     Float?
+  countAchieved     Float?
+  remarks           String?  @db.Text
+
+  productionOrder   SpinningProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  machine           Machine  @relation(fields: [machineId], references: [id])
+  employee          Employee? @relation(fields: [employeeId], references: [id])
+  shift             Shift?   @relation(fields: [shiftId], references: [id])
+
+  createdAt         DateTime @default(now())
+
+  @@map("spinning_production_logs")
+}
+
+model WasteLog {
+  id                String   @id @default(uuid())
+  productionOrderId String
+  wasteType         String   @db.VarChar(100)  // "Sliver waste", "Comber noil", "Sweep waste"
+  quantityKg        Float
+  normPct           Float?   // expected/standard %
+  actualPct         Float?
+  logDate           DateTime @db.Date
+
+  productionOrder   SpinningProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+
+  createdAt         DateTime @default(now())
+
+  @@map("waste_logs")
+}
+
+// ============================================================================
+// 8. WEAVING PRODUCTION
+// ============================================================================
+
+model WarpBeam {
+  id             String   @id @default(uuid())
+  beamNumber     String   @unique @db.VarChar(100)
+  yarnLotId      String
+  totalEnds      Int
+  lengthMeters   Float
+  status         BeamStatus @default(READY)
+  loomId         String?
+
+  yarnLot        YarnLot  @relation(fields: [yarnLotId], references: [id])
+  loom           Loom?    @relation(fields: [loomId], references: [id])
+  weavingOrders  WeavingProductionOrder[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("warp_beams")
+}
+
+enum BeamStatus {
+  READY
+  ON_LOOM
+  EXHAUSTED
+}
+
+model WeavingProductionOrder {
+  id             String   @id @default(uuid())
+  organizationId String
+  orderNumber    String   @unique @db.VarChar(100)
+  fabricId       String
+  warpBeamId     String?
+  bomId          String?
+  targetLengthM  Float
+  producedLengthM Float   @default(0)
+  status         ProductionOrderStatus @default(PLANNED)
+  startDate      DateTime?
+  endDate        DateTime?
+
+  warpBeam       WarpBeam? @relation(fields: [warpBeamId], references: [id])
+  logs           WeavingProductionLog[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("weaving_production_orders")
+}
+
+model WeavingProductionLog {
+  id                String   @id @default(uuid())
+  productionOrderId String
+  loomId            String
+  employeeId        String?
+  shiftId           String?
+  logDate           DateTime @db.Date
+  outputMeters      Float
+  efficiencyPct     Float?
+  pickInsertionRate Float?
+  stops             Int?     // number of loom stops
+  remarks           String?  @db.Text
+
+  productionOrder   WeavingProductionOrder @relation(fields: [productionOrderId], references: [id], onDelete: Cascade)
+  loom              Loom     @relation(fields: [loomId], references: [id])
+  employee          Employee? @relation(fields: [employeeId], references: [id])
+  shift             Shift?   @relation(fields: [shiftId], references: [id])
+
+  createdAt         DateTime @default(now())
+
+  @@map("weaving_production_logs")
+}
+
+// ============================================================================
+// 9. QUALITY CONTROL
+// ============================================================================
+
+model QualityInspection {
+  id            String   @id @default(uuid())
+  fabricRollId  String?
+  inspectionType QualityInspectionType
+  pointsScore   Float?   // 4-point system score
+  grade         FabricGrade @default(A)
+  inspectorId   String?
+  inspectedAt   DateTime @default(now())
+  remarks       String?  @db.Text
+
+  fabricRoll    FabricRoll? @relation(fields: [fabricRollId], references: [id], onDelete: Cascade)
+  defects       QualityDefect[]
+
+  @@map("quality_inspections")
+}
+
+enum QualityInspectionType {
+  GREY_FABRIC_4POINT
+  YARN_LAB_TEST
+  FINAL_INSPECTION
+}
+
+model QualityDefect {
+  id            String   @id @default(uuid())
+  inspectionId  String
+  defectCode    String   @db.VarChar(100)   // "Broken pick", "Slub", "Oil stain"
+  points        Float    @default(0)
+  positionMeter Float?
+
+  inspection    QualityInspection @relation(fields: [inspectionId], references: [id], onDelete: Cascade)
+
+  @@map("quality_defects")
+}
+
+// ============================================================================
+// 10. PROCUREMENT
+// ============================================================================
+
+model Supplier {
+  id              String   @id @default(uuid())
+  organizationId  String
+  name            String   @db.VarChar(255)
+  email           String?  @unique @db.VarChar(191)
+  phone           String?  @db.VarChar(20)
+  address         String?  @db.Text
+  taxId           String?  @db.VarChar(100)
+  paymentTerms    String?  @db.VarChar(100)
+  isActive        Boolean  @default(true)
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  purchaseOrders  PurchaseOrder[]
+  fiberLots       FiberLot[]
+  payments        Payment[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("suppliers")
+}
+
+model PurchaseOrder {
+  id             String   @id @default(uuid())
+  organizationId String
+  poNumber       String   @unique @db.VarChar(100)
+  supplierId     String
+  orderDate      DateTime @default(now())
+  expectedDate   DateTime?
+  status         PurchaseOrderStatus @default(DRAFT)
+  totalAmount    Float    @default(0)
+  currency       String   @default("BDT") @db.VarChar(10)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  supplier       Supplier @relation(fields: [supplierId], references: [id])
+  items          PurchaseOrderItem[]
+  grns           GoodsReceivedNote[]
+  payments       Payment[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("purchase_orders")
+}
+
+enum PurchaseOrderStatus {
+  DRAFT
+  APPROVED
+  PARTIALLY_RECEIVED
+  RECEIVED
+  CANCELLED
+}
+
+model PurchaseOrderItem {
+  id          String   @id @default(uuid())
+  purchaseOrderId String
+  fiberId     String?
+  yarnId      String?
+  description String   @db.VarChar(255)
+  quantity    Float
+  unit        String   @db.VarChar(20)
+  rate        Float
+  amount      Float
+
+  purchaseOrder PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  fiber         Fiber?  @relation(fields: [fiberId], references: [id])
+  yarn          YarnMaster? @relation(fields: [yarnId], references: [id])
+
+  @@map("purchase_order_items")
+}
+
+model GoodsReceivedNote {
+  id              String   @id @default(uuid())
+  purchaseOrderId String
+  grnNumber       String   @unique @db.VarChar(100)
+  receivedDate    DateTime @default(now())
+  receivedBy      String?
+  remarks         String?  @db.Text
+
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  items           GRNItem[]
+
+  createdAt       DateTime @default(now())
+
+  @@map("goods_received_notes")
+}
+
+model GRNItem {
+  id             String   @id @default(uuid())
+  grnId          String
+  description    String   @db.VarChar(255)
+  orderedQty     Float
+  receivedQty    Float
+  rejectedQty    Float    @default(0)
+  unit           String   @db.VarChar(20)
+
+  grn            GoodsReceivedNote @relation(fields: [grnId], references: [id], onDelete: Cascade)
+
+  @@map("grn_items")
+}
+
+// ============================================================================
+// 11. SALES, DISPATCH & CRM
+// ============================================================================
+
+model Customer {
+  id              String   @id @default(uuid())
+  organizationId  String
+  name            String   @db.VarChar(255)
+  email           String?  @unique @db.VarChar(191)
+  phone           String?  @db.VarChar(20)
+  address         String?  @db.Text
+  taxId           String?  @db.VarChar(100)
+  creditLimit     Float    @default(0)
+  paymentTerms    String?  @db.VarChar(100)
+  isActive        Boolean  @default(true)
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  salesOrders     SalesOrder[]
+  invoices        SalesInvoice[]
+  payments        Receipt[]
+  contacts        Contact[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("customers")
+}
+
+model Contact {
+  id          String   @id @default(uuid())
+  customerId  String
+  name        String   @db.VarChar(255)
+  designation String?  @db.VarChar(100)
+  email       String?  @db.VarChar(191)
+  phone       String?  @db.VarChar(20)
+
+  customer    Customer @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@map("contacts")
+}
+
+model SalesOrder {
+  id             String   @id @default(uuid())
+  organizationId String
+  soNumber       String   @unique @db.VarChar(100)
+  customerId     String
+  orderDate      DateTime @default(now())
+  deliveryDate   DateTime?
+  status         SalesOrderStatus @default(DRAFT)
+  totalAmount    Float    @default(0)
+  currency       String   @default("BDT") @db.VarChar(10)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer @relation(fields: [customerId], references: [id])
+  items          SalesOrderItem[]
+  dispatches     Dispatch[]
+  invoices       SalesInvoice[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("sales_orders")
+}
+
+enum SalesOrderStatus {
+  DRAFT
+  CONFIRMED
+  PARTIALLY_DISPATCHED
+  DISPATCHED
+  INVOICED
+  CANCELLED
+}
+
+model SalesOrderItem {
+  id          String   @id @default(uuid())
+  salesOrderId String
+  fabricId    String?
+  yarnId      String?
+  description String   @db.VarChar(255)
+  quantity    Float
+  unit        String   @db.VarChar(20)
+  rate        Float
+  amount      Float
+
+  salesOrder  SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  fabric      FabricConstruction? @relation(fields: [fabricId], references: [id])
+  yarn        YarnMaster? @relation(fields: [yarnId], references: [id])
+
+  @@map("sales_order_items")
+}
+
+model Dispatch {
+  id             String   @id @default(uuid())
+  salesOrderId   String
+  dispatchNumber String   @unique @db.VarChar(100)
+  dispatchDate   DateTime @default(now())
+  vehicleNumber  String?  @db.VarChar(50)
+  driverName     String?  @db.VarChar(100)
+  remarks        String?  @db.Text
+
+  salesOrder     SalesOrder @relation(fields: [salesOrderId], references: [id], onDelete: Cascade)
+  items          DispatchItem[]
+
+  createdAt      DateTime @default(now())
+
+  @@map("dispatches")
+}
+
+model DispatchItem {
+  id           String   @id @default(uuid())
+  dispatchId   String
+  fabricRollId String?
+  quantity     Float
+  unit         String   @db.VarChar(20)
+
+  dispatch     Dispatch    @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
+  fabricRoll   FabricRoll? @relation(fields: [fabricRollId], references: [id])
+
+  @@map("dispatch_items")
+}
+
+model SalesInvoice {
+  id             String   @id @default(uuid())
+  salesOrderId   String
+  customerId     String
+  invoiceNumber  String   @unique @db.VarChar(100)
+  invoiceDate    DateTime @default(now())
+  dueDate        DateTime?
+  totalAmount    Float    @default(0)
+  paidAmount     Float    @default(0)
+  status         InvoiceStatus @default(UNPAID)
+  currency       String   @default("BDT") @db.VarChar(10)
+
+  salesOrder     SalesOrder @relation(fields: [salesOrderId], references: [id])
+  customer       Customer   @relation(fields: [customerId], references: [id])
+  items          SalesInvoiceItem[]
+  receipts       Receipt[]
+
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@map("sales_invoices")
+}
+
+enum InvoiceStatus {
+  UNPAID
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model SalesInvoiceItem {
+  id          String   @id @default(uuid())
+  invoiceId   String
+  description String   @db.VarChar(255)
+  quantity    Float
+  unit        String   @db.VarChar(20)
+  rate        Float
+  amount      Float
+
+  invoice     SalesInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  @@map("sales_invoice_items")
+}
+
+// ============================================================================
+// 12. ACCOUNTING / FINANCE
+// ============================================================================
+
+model ChartOfAccount {
+  id             String   @id @default(uuid())
+  organizationId String
+  code           String   @db.VarChar(20)
+  name           String   @db.VarChar(255)
+  accountType    AccountType
+  parentId       String?
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  parent         ChartOfAccount? @relation("AccountHierarchy", fields: [parentId], references: [id])
+  children       ChartOfAccount[] @relation("AccountHierarchy")
+  journalLines   JournalEntryLine[]
+  bankAccounts   BankAccount[]
+
+  @@unique([organizationId, code])
+  @@map("chart_of_accounts")
+}
+
+enum AccountType {
+  ASSET
+  LIABILITY
+  EQUITY
+  INCOME
+  EXPENSE
+}
+
+model JournalEntry {
+  id             String   @id @default(uuid())
+  organizationId String
+  entryNumber    String   @unique @db.VarChar(100)
+  entryDate      DateTime @default(now())
+  referenceType  String?  @db.VarChar(100)  // "SalesInvoice", "PurchaseOrder", "Manual"
+  referenceId    String?
+  description    String?  @db.Text
+  isPosted       Boolean  @default(false)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lines          JournalEntryLine[]
+
+  createdAt      DateTime @default(now())
+
+  @@map("journal_entries")
+}
+
+model JournalEntryLine {
+  id             String   @id @default(uuid())
+  journalEntryId String
+  accountId      String
+  debit          Float    @default(0)
+  credit         Float    @default(0)
+  description    String?  @db.VarChar(255)
+
+  journalEntry   JournalEntry   @relation(fields: [journalEntryId], references: [id], onDelete: Cascade)
+  account        ChartOfAccount @relation(fields: [accountId], references: [id])
+
+  @@map("journal_entry_lines")
+}
+
+model BankAccount {
+  id             String   @id @default(uuid())
+  accountId      String   // links to ChartOfAccount (asset)
+  bankName       String   @db.VarChar(255)
+  accountNumber  String   @db.VarChar(100)
+  branchName     String?  @db.VarChar(255)
+  swiftCode      String?  @db.VarChar(50)
+  currentBalance Float    @default(0)
+
+  account        ChartOfAccount @relation(fields: [accountId], references: [id])
+  letterOfCredits LetterOfCredit[]
+  payments        Payment[]
+  receipts        Receipt[]
+
+  createdAt      DateTime @default(now())
+
+  @@map("bank_accounts")
+}
+
+model LetterOfCredit {
+  id             String   @id @default(uuid())
+  bankAccountId  String
+  lcNumber       String   @unique @db.VarChar(100)
+  beneficiary    String   @db.VarChar(255)
+  amount         Float
+  currency       String   @default("USD") @db.VarChar(10)
+  issueDate      DateTime
+  expiryDate     DateTime
+  status         LCStatus @default(OPEN)
+
+  bankAccount    BankAccount @relation(fields: [bankAccountId], references: [id])
+
+  createdAt      DateTime @default(now())
+
+  @@map("letters_of_credit")
+}
+
+enum LCStatus {
+  OPEN
+  AMENDED
+  SHIPPED
+  NEGOTIATED
+  CLOSED
+  CANCELLED
+}
+
+model Payment {
+  id             String   @id @default(uuid())
+  supplierId     String?
+  purchaseOrderId String?
+  bankAccountId  String?
+  amount         Float
+  paymentDate    DateTime @default(now())
+  method         PaymentMethod @default(BANK_TRANSFER)
+  referenceNo    String?  @db.VarChar(100)
+
+  supplier       Supplier?      @relation(fields: [supplierId], references: [id])
+  purchaseOrder  PurchaseOrder? @relation(fields: [purchaseOrderId], references: [id])
+  bankAccount    BankAccount?   @relation(fields: [bankAccountId], references: [id])
+
+  createdAt      DateTime @default(now())
+
+  @@map("payments")
+}
+
+model Receipt {
+  id             String   @id @default(uuid())
+  customerId     String?
+  invoiceId      String?
+  bankAccountId  String?
+  amount         Float
+  receiptDate    DateTime @default(now())
+  method         PaymentMethod @default(BANK_TRANSFER)
+  referenceNo    String?  @db.VarChar(100)
+
+  customer       Customer?     @relation(fields: [customerId], references: [id])
+  invoice        SalesInvoice? @relation(fields: [invoiceId], references: [id])
+  bankAccount    BankAccount?  @relation(fields: [bankAccountId], references: [id])
+
+  createdAt      DateTime @default(now())
+
+  @@map("receipts")
+}
+
+enum PaymentMethod {
+  CASH
+  BANK_TRANSFER
+  CHEQUE
+  MOBILE_BANKING
+  LC
+}
+
+// ============================================================================
+// 13. GENERIC INVENTORY (non-textile-specific items: chemicals, dyes, spares)
+// ============================================================================
+
+model Product {
+  id              String   @id @default(uuid())
+  organizationId  String
+  name            String   @db.VarChar(255)
+  sku             String   @unique @db.VarChar(100)
+  barcode         String?  @db.VarChar(100)
+  category        String   @db.VarChar(100)   // Chemical, Dye, Spare Part, Packing Material
+  subCategory     String?  @db.VarChar(100)
+  description     String?  @db.Text
+  unit            String   @db.VarChar(50)
+  price           Float
+  costPrice       Float?
+  stockCount      Int      @default(0)
+  reorderLevel    Int      @default(10)
+  isActive        Boolean  @default(true)
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  warehouseStocks WarehouseStock[]
+  variants        ProductVariant[]
+  stockMovements  StockMovement[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("products")
+}
+
+model ProductVariant {
+  id          String  @id @default(uuid())
+  productId   String
+  name        String  @db.VarChar(255)
+  sku         String  @unique @db.VarChar(100)
+  price       Float
+  stockCount  Int     @default(0)
+
+  product     Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@map("product_variants")
+}
+
+model Warehouse {
+  id              String   @id @default(uuid())
+  organizationId  String
+  branchId        String?
+  name            String   @db.VarChar(255)
+  warehouseType   WarehouseType @default(GENERAL)
+  location        String?  @db.VarChar(255)
+  isDefault       Boolean  @default(false)
+
+  organization    Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch          Branch?      @relation(fields: [branchId], references: [id])
+  stocks          WarehouseStock[]
+  fiberLots       FiberLot[]
+  yarnLots        YarnLot[]
+  fabricRolls     FabricRoll[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  @@map("warehouses")
+}
+
+enum WarehouseType {
+  GENERAL
+  RAW_MATERIAL
+  WIP
+  FINISHED_GOODS
+}
+
+model WarehouseStock {
+  id          String  @id @default(uuid())
+  warehouseId String
+  productId   String
+  quantity    Int     @default(0)
+
+  warehouse   Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  product     Product   @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([warehouseId, productId])
+  @@map("warehouse_stocks")
+}
+
+model StockMovement {
+  id           String   @id @default(uuid())
+  productId    String
+  movementType StockMovementType
+  quantity     Float
+  referenceType String? @db.VarChar(100)
+  referenceId   String?
+  remarks      String?  @db.Text
+
+  product      Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  createdAt    DateTime @default(now())
+
+  @@map("stock_movements")
+}
+
+enum StockMovementType {
+  IN
+  OUT
+  TRANSFER
+  ADJUSTMENT
+}
+
+// ============================================================================
+// 14. SYSTEM: APPROVALS, NOTIFICATIONS, ATTACHMENTS, SETTINGS, AUDIT
+// ============================================================================
+
+model ApprovalWorkflow {
+  id             String   @id @default(uuid())
+  organizationId String
+  name           String   @db.VarChar(255)   // "Purchase Order Approval"
+  entityType     String   @db.VarChar(100)   // "PurchaseOrder", "LeaveRequest"
+  isActive       Boolean  @default(true)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  steps          ApprovalStep[]
+
+  createdAt      DateTime @default(now())
+
+  @@map("approval_workflows")
+}
+
+model ApprovalStep {
+  id           String   @id @default(uuid())
+  workflowId   String
+  stepOrder    Int
+  approverId   String?
+  status       ApprovalStatus @default(PENDING)
+  actedAt      DateTime?
+  comments     String?  @db.Text
+
+  workflow     ApprovalWorkflow @relation(fields: [workflowId], references: [id], onDelete: Cascade)
+  approver     User?    @relation(fields: [approverId], references: [id])
+
+  @@map("approval_steps")
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model Notification {
+  id             String   @id @default(uuid())
+  organizationId String
+  userId         String
+  title          String   @db.VarChar(255)
+  message        String   @db.Text
+  type           NotificationType @default(INFO)
+  isRead         Boolean  @default(false)
+  link           String?  @db.VarChar(500)
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  createdAt      DateTime @default(now())
+
+  @@map("notifications")
+}
+
+enum NotificationType {
+  INFO
+  WARNING
+  ALERT
+  SUCCESS
+}
+
+model Attachment {
+  id             String   @id @default(uuid())
+  organizationId String
+  fileName       String   @db.VarChar(255)
+  filePath       String   @db.VarChar(500)
+  fileType       String?  @db.VarChar(100)
+  fileSize       Int?
+  referenceType  String?  @db.VarChar(100)  // "SalesOrder", "QualityInspection", etc.
+  referenceId    String?
+  uploadedBy     String?
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  createdAt      DateTime @default(now())
+
+  @@map("attachments")
+}
+
+model Setting {
+  id             String   @id @default(uuid())
+  organizationId String
+  key            String   @db.VarChar(191)
+  value          String   @db.Text
+
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, key])
+  @@map("settings")
+}
+
+model AuditLog {
+  id          String   @id @default(uuid())
+  userId      String?
+  action      String   @db.VarChar(100)
+  resource    String   @db.VarChar(100)
+  resourceId  String?  @db.VarChar(191)
+  details     Json?
+  ipAddress   String?  @db.VarChar(45)
+  userAgent   String?  @db.Text
+
+  user        User?    @relation(fields: [userId], references: [id])
+
+  createdAt   DateTime @default(now())
+
+  @@map("audit_logs")
+}

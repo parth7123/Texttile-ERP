@@ -1,0 +1,39 @@
+/* app/globals.css */
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", system-ui, sans-serif;
+}
+
+body {
+  font-family: var(--font-sans);
+}
+
+.card {
+  background-color: #18181b;
+  border: 1px solid #3f3f46;
+  border-radius: 20px;
+}
+
+/* Fix all light-surface (bg-gray-50) areas: forms, table headers, etc. */
+.bg-gray-50 {
+  color: #111827; /* dark text on light background */
+}
+
+.bg-gray-50 label {
+  color: #374151;
+}
+
+/* Inputs/selects need explicit colors too — dark theme's global text color
+   otherwise makes typed text invisible against their white background */
+input,
+select,
+textarea {
+  color: #111827;
+  background-color: #ffffff;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: #9ca3af;
+}
